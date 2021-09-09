@@ -27,7 +27,7 @@ std::vector<uint8_t> CTRL_SET = {
     0x00,  // [CTRL_2] Default
     0x00,  // [CTRL_3] Default
     0x00,  // [CTRL_4] Default
-    0xE8,  // [CTRL_5] Mag: 12.5 Hz Refresh + High Resolution
+    0xE8,  // [CTRL_5] Temp EN + Mag: 12.5 Hz Refresh + High Resolution
     0x20,  // [CTRL_6] Mag full-scale +/-4 gauss
     0x00,  // [CTRL_7] Cont-conv mode
 };
@@ -49,22 +49,24 @@ lsm303d::Status Driver::io_end(void) {
 lsm303d::Status Driver::io_read(uint8_t reg, size_t count, uint8_t *buffer) {
   Status status = Status::STATUS_OK;
 
-  if (buffer == nullptr) {
-    status = Status::STATUS_INVALID_ARG;
-  } else {
-    this->io_start();
-    Wire.write((uint8_t)reg | 0x80);  // add address auto-increment
-    status = this->io_end();
-  }
+  WITH_LOCK(Wire) {
+    if (buffer == nullptr) {
+      status = Status::STATUS_INVALID_ARG;
+    } else {
+      this->io_start();
+      Wire.write((uint8_t)reg | 0x80);  // add address auto-increment
+      status = this->io_end();
+    }
 
-  if (status == Status::STATUS_OK) {
-    Wire.requestFrom(this->i2c_address, count);
+    if (status == Status::STATUS_OK) {
+      Wire.requestFrom(this->i2c_address, count);
 
-    while (Wire.available() < count)
-      ;
+      while (Wire.available() < count)
+        ;
 
-    for (size_t i = 0; i < count; i++) {
-      buffer[i] = Wire.read();
+      for (size_t i = 0; i < count; i++) {
+        buffer[i] = Wire.read();
+      }
     }
   }
 
@@ -73,13 +75,19 @@ lsm303d::Status Driver::io_read(uint8_t reg, size_t count, uint8_t *buffer) {
 }
 
 lsm303d::Status Driver::io_write(uint8_t reg, uint8_t data) {
-  this->io_start();
+  Status status;
 
-  Wire.write((uint8_t)reg);
-  Wire.write(data);
+  WITH_LOCK(Wire) {
+    this->io_start();
 
-  return (this->io_end() == Status::STATUS_OK) ? Status::STATUS_OK
-                                               : Status::STATUS_IO_WRITE;
+    Wire.write((uint8_t)reg);
+    Wire.write(data);
+
+    status = this->io_end();
+  }
+
+  return (status == Status::STATUS_OK) ? Status::STATUS_OK
+                                       : Status::STATUS_IO_WRITE;
 }
 
 lsm303d::Status Driver::init(void) {
@@ -131,7 +139,7 @@ lsm303d::Status Driver::read(lsm303d::data_t *data) {
   }
 
   if (status == Status::STATUS_OK) {
-    data->temp = ((read_buffer[1] & 0x0F) << 8) | read_buffer[0];
+    data->temp = (int16_t)(read_buffer[1] << 8 | read_buffer[0]) / 8.0 + 25.0;
 
     status = this->io_read((uint8_t)Reg::MAG_OUT, counts::MAG_OUT_READS,
                            read_buffer);

@@ -12,7 +12,15 @@
 
 ParticleWebLog particleWebLog;
 
-lsm303d::Driver driver(0x1D, CLOCK_SPEED_100KHZ);
+void compass_poll_handler(void);
+lsm303d::Driver compass(0x1D, CLOCK_SPEED_100KHZ);
+lsm303d::Status compass_data_status = lsm303d::Status::STATUS_FAIL;
+lsm303d::data_t compass_data;
+Timer compass_poll_timer(500, compass_poll_handler);
+
+void compass_poll_handler(void) {
+  SINGLE_THREADED_BLOCK() { compass_data_status = compass.read(&compass_data); }
+}
 
 String build_dim_data(lsm303d::dimension_t *dim) {
   int val;
@@ -34,38 +42,46 @@ String build_dim_data(lsm303d::dimension_t *dim) {
 }
 
 String publish_compass_data(void) {
-  lsm303d::data_t data;
+  String ret_str;
+  lsm303d::data_t data_cp;
+  lsm303d::Status data_status;
 
-  lsm303d::Status status = driver.read(&data);
-  if (status == lsm303d::Status::STATUS_OK) {
+  SINGLE_THREADED_BLOCK() {
+    data_status = compass_data_status;
+    data_cp = compass_data;
+  }
+
+  if (data_status != lsm303d::Status::STATUS_OK) {
+    Log.warn("Read data failed: 0x%X", static_cast<unsigned int>(data_status));
+    ret_str = "{\"success\": false}";
+  } else {
     char buf[256];
     memset(buf, 0, sizeof(buf));
     JSONBufferWriter writer(buf, sizeof(buf) - 1);
 
     writer.beginObject();
     writer.name("success").value(true);
-    writer.name("acc").value(build_dim_data(&data.acc));
-    writer.name("mag").value(build_dim_data(&data.mag));
-    int temp = data.temp;
+    writer.name("acc").value(build_dim_data(&data_cp.acc));
+    writer.name("mag").value(build_dim_data(&data_cp.mag));
+    int temp = data_cp.temp;
     writer.name("temp").value(temp);
     writer.endObject();
 
-    return String(buf);
-  } else {
-    Log.warn("Read data failed: 0x%X", static_cast<unsigned int>(status));
-
-    return "{\"success\": false}";
+    ret_str = String(buf);
   }
+
+  return ret_str;
 }
 
 // setup() runs once, when the device is first turned on.
 void setup() {
   // Put initialization like pinMode and begin functions here.
 
-  lsm303d::Status status = driver.init();
+  lsm303d::Status status = compass.init();
   if (status == lsm303d::Status::STATUS_OK) {
     Log.info("Driver Setup Success");
     Particle.variable("compass_raw", publish_compass_data);
+    compass_poll_timer.start();
   } else {
     Log.warn("Driver setup failed: 0x%X", static_cast<unsigned int>(status));
   }
